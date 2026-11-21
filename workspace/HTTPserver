@@ -1,0 +1,432 @@
+#include <arpa/inet.h>
+#include <algorithm>
+#include <cerrno>
+#include <charconv>
+#include <cctype>
+#include <cstring>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <netinet/in.h>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <sys/socket.h>
+#include <unordered_map>
+#include <unistd.h>
+#include <utility>
+#include <vector>
+
+#include "imLate.h"
+
+namespace {
+constexpr int kDefaultPort = 8081;
+constexpr std::size_t kMaxRequestSize = 65536;
+constexpr std::size_t kMaxTasks = 100;
+
+struct HttpRequest {
+    std::string method;
+    std::string path;
+    std::string body;
+};
+
+bool sendAll(int client, const std::string& data) {
+    std::size_t sent = 0;
+    while (sent < data.size()) {
+        const ssize_t count =
+            send(client, data.data() + sent, data.size() - sent, MSG_NOSIGNAL);
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        if (count <= 0) {
+            return false;
+        }
+        sent += static_cast<std::size_t>(count);
+    }
+    return true;
+}
+
+void respond(int client, const std::string& status, const std::string& body,
+             const std::string& contentType = "text/html; charset=utf-8") {
+    std::ostringstream response;
+    response << "HTTP/1.1 " << status << "\r\n"
+             << "Content-Type: " << contentType << "\r\n"
+             << "Content-Length: " << body.size() << "\r\n"
+             << "Connection: close\r\n\r\n"
+             << body;
+    if (!sendAll(client, response.str())) {
+        std::cerr << "Failed to send response to client\n";
+    }
+}
+
+bool receiveRequest(int client, HttpRequest& result) {
+    std::string request;
+    char buffer[4096];
+    std::size_t headerEnd = std::string::npos;
+
+    while (headerEnd == std::string::npos &&
+           request.size() < kMaxRequestSize) {
+        const ssize_t count = recv(client, buffer, sizeof(buffer), 0);
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        if (count <= 0) {
+            return false;
+        }
+        request.append(buffer, static_cast<std::size_t>(count));
+        headerEnd = request.find("\r\n\r\n");
+    }
+
+    if (headerEnd == std::string::npos) {
+        return false;
+    }
+
+    std::istringstream headers(request.substr(0, headerEnd));
+    std::string version;
+    {
+        std::istringstream lineReader(request.substr(0, request.find("\r\n")));
+        if (!(lineReader >> result.method >> result.path >> version)) {
+            return false;
+        }
+    }
+
+    std::size_t contentLength = 0;
+    std::string headerLine;
+    std::getline(headers, headerLine);
+    while (std::getline(headers, headerLine)) {
+        if (!headerLine.empty() && headerLine.back() == '\r') {
+            headerLine.pop_back();
+        }
+        const std::size_t colon = headerLine.find(':');
+        if (colon == std::string::npos) {
+            continue;
+        }
+        std::string name = headerLine.substr(0, colon);
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        if (name == "content-length") {
+            const std::string value = headerLine.substr(colon + 1);
+            const char* begin = value.data();
+            const char* end = begin + value.size();
+            while (begin != end && std::isspace(
+                       static_cast<unsigned char>(*begin))) {
+                ++begin;
+            }
+            const auto parsed = std::from_chars(begin, end, contentLength);
+            if (parsed.ec != std::errc{} || parsed.ptr != end) {
+                return false;
+            }
+        }
+    }
+
+    const std::size_t bodyStart = headerEnd + 4;
+    if (contentLength > kMaxRequestSize - bodyStart) {
+        return false;
+    }
+    const std::size_t requestSize = bodyStart + contentLength;
+    while (request.size() < requestSize) {
+        const std::size_t remaining = requestSize - request.size();
+        const std::size_t bytesToRead = std::min(remaining, sizeof(buffer));
+        const ssize_t count = recv(client, buffer, bytesToRead, 0);
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        if (count <= 0) {
+            return false;
+        }
+        request.append(buffer, static_cast<std::size_t>(count));
+    }
+    result.body = request.substr(bodyStart, contentLength);
+    const std::size_t queryStart = result.path.find('?');
+    if (queryStart != std::string::npos) {
+        result.path.erase(queryStart);
+    }
+    return true;
+}
+
+int hexDigit(char ch) {
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    return -1;
+}
+
+bool decodeFormComponent(const std::string& encoded, std::string& decoded) {
+    decoded.clear();
+    for (std::size_t i = 0; i < encoded.size(); ++i) {
+        if (encoded[i] == '+') {
+            decoded.push_back(' ');
+        } else if (encoded[i] == '%') {
+            if (i + 2 >= encoded.size()) {
+                return false;
+            }
+            const int high = hexDigit(encoded[i + 1]);
+            const int low = hexDigit(encoded[i + 2]);
+            if (high < 0 || low < 0) {
+                return false;
+            }
+            decoded.push_back(static_cast<char>(high * 16 + low));
+            i += 2;
+        } else {
+            decoded.push_back(encoded[i]);
+        }
+    }
+    return true;
+}
+
+bool parseForm(const std::string& body,
+               std::unordered_map<std::string, std::string>& values) {
+    std::size_t start = 0;
+    while (start < body.size()) {
+        const std::size_t end = body.find('&', start);
+        const std::string pair = body.substr(
+            start, end == std::string::npos ? std::string::npos : end - start);
+        const std::size_t equals = pair.find('=');
+        std::string key;
+        std::string value;
+        if (equals == std::string::npos ||
+            !decodeFormComponent(pair.substr(0, equals), key) ||
+            !decodeFormComponent(pair.substr(equals + 1), value) ||
+            !values.emplace(std::move(key), std::move(value)).second) {
+            return false;
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return true;
+}
+
+template <typename Integer>
+bool parseInteger(const std::string& value, Integer& result) {
+    const char* begin = value.data();
+    const char* end = begin + value.size();
+    const auto parsed = std::from_chars(begin, end, result);
+    return parsed.ec == std::errc{} && parsed.ptr == end;
+}
+
+std::string jsonEscape(const std::string& value) {
+    std::ostringstream escaped;
+    for (unsigned char ch : value) {
+        switch (ch) {
+            case '"': escaped << "\\\""; break;
+            case '\\': escaped << "\\\\"; break;
+            case '\b': escaped << "\\b"; break;
+            case '\f': escaped << "\\f"; break;
+            case '\n': escaped << "\\n"; break;
+            case '\r': escaped << "\\r"; break;
+            case '\t': escaped << "\\t"; break;
+            default:
+                if (ch < 0x20) {
+                    escaped << "\\u00" << std::hex << std::setw(2)
+                            << std::setfill('0') << static_cast<int>(ch)
+                            << std::dec;
+                } else {
+                    escaped << static_cast<char>(ch);
+                }
+        }
+    }
+    return escaped.str();
+}
+
+std::string scheduleJson(const imlate::Schedule& schedule) {
+    std::ostringstream output;
+    output << "{\"availableMinutes\":" << schedule.availableMinutes
+           << ",\"scheduled\":[";
+    for (std::size_t i = 0; i < schedule.scheduled.size(); ++i) {
+        const imlate::PlannedTask& task = schedule.scheduled[i];
+        if (i != 0) output << ',';
+        output << "{\"title\":\"" << jsonEscape(task.task.title)
+               << "\",\"priority\":\""
+               << imlate::priorityName(task.task.priority)
+               << "\",\"durationMinutes\":" << task.task.durationMinutes
+               << ",\"start\":" << task.startTime
+               << ",\"end\":" << task.endTime << "}";
+    }
+    output << "],\"unscheduled\":[";
+    for (std::size_t i = 0; i < schedule.unscheduled.size(); ++i) {
+        const imlate::Task& task = schedule.unscheduled[i];
+        if (i != 0) output << ',';
+        output << "{\"title\":\"" << jsonEscape(task.title)
+               << "\",\"priority\":\"" << imlate::priorityName(task.priority)
+               << "\",\"durationMinutes\":" << task.durationMinutes << '}';
+    }
+    output << "]}";
+    return output.str();
+}
+
+void handleSchedule(int client, const std::string& body) {
+    std::unordered_map<std::string, std::string> values;
+    int taskCount = 0;
+    std::time_t dayStart = 0;
+    std::time_t dayEnd = 0;
+    if (!parseForm(body, values) || values.count("dayStart") == 0 ||
+        values.count("dayEnd") == 0 ||
+        !parseInteger(values["dayStart"], dayStart) ||
+        !parseInteger(values["dayEnd"], dayEnd) ||
+        values.count("taskCount") == 0 ||
+        !parseInteger(values["taskCount"], taskCount) ||
+        taskCount < 0 || taskCount > static_cast<int>(kMaxTasks)) {
+        respond(client, "400 Bad Request", "{\"error\":\"Invalid schedule request\"}",
+                "application/json; charset=utf-8");
+        return;
+    }
+
+    std::vector<imlate::Task> tasks;
+    tasks.reserve(static_cast<std::size_t>(taskCount));
+    for (int i = 0; i < taskCount; ++i) {
+        const std::string suffix = "_" + std::to_string(i);
+        const auto title = values.find("title" + suffix);
+        const auto duration = values.find("duration" + suffix);
+        const auto priority = values.find("priority" + suffix);
+        int durationMinutes = 0;
+        if (title == values.end() || title->second.empty() ||
+            title->second.size() > 120 || duration == values.end() ||
+            !parseInteger(duration->second, durationMinutes) ||
+            durationMinutes < 1 || durationMinutes > 1440 ||
+            priority == values.end()) {
+            respond(client, "400 Bad Request",
+                    "{\"error\":\"A task has invalid name, duration, or priority\"}",
+                    "application/json; charset=utf-8");
+            return;
+        }
+
+        imlate::Priority taskPriority;
+        if (priority->second == "mustDo") {
+            taskPriority = imlate::Priority::mustDo;
+        } else if (priority->second == "shrinkable") {
+            taskPriority = imlate::Priority::shrinkable;
+        } else if (priority->second == "movable") {
+            taskPriority = imlate::Priority::movable;
+        } else {
+            respond(client, "400 Bad Request",
+                    "{\"error\":\"Unknown task priority\"}",
+                    "application/json; charset=utf-8");
+            return;
+        }
+        tasks.push_back({title->second, durationMinutes, taskPriority});
+    }
+
+    try {
+        const imlate::Schedule schedule =
+            imlate::buildSchedule(dayStart, dayEnd, tasks);
+        respond(client, "200 OK", scheduleJson(schedule),
+                "application/json; charset=utf-8");
+    } catch (const std::invalid_argument& error) {
+        respond(client, "400 Bad Request",
+                "{\"error\":\"" + jsonEscape(error.what()) + "\"}",
+                "application/json; charset=utf-8");
+    } catch (const std::runtime_error& error) {
+        respond(client, "500 Internal Server Error",
+                "{\"error\":\"" + jsonEscape(error.what()) + "\"}",
+                "application/json; charset=utf-8");
+    }
+}
+
+void handleClient(int client, const std::string& fullPage,
+                  const std::string& dayPage) {
+    HttpRequest request;
+    if (!receiveRequest(client, request)) {
+        respond(client, "400 Bad Request", "Invalid request");
+        return;
+    }
+
+    if (request.path == "/api/schedule") {
+        if (request.method != "POST") {
+            respond(client, "405 Method Not Allowed",
+                    "{\"error\":\"Use POST for scheduling\"}",
+                    "application/json; charset=utf-8");
+        } else {
+            handleSchedule(client, request.body);
+        }
+    } else if (request.method != "GET") {
+        respond(client, "405 Method Not Allowed", "Method not allowed");
+    } else if (request.path == "/" || request.path == "/calender.html" ||
+               request.path == "/calenderFull.html") {
+        respond(client, "200 OK", fullPage);
+    } else if (request.path == "/calenderDay.html") {
+        respond(client, "200 OK", dayPage);
+    } else {
+        respond(client, "404 Not Found", "Not found");
+    }
+}
+}  // namespace
+
+int main(int argc, char* argv[]) {
+    int port = kDefaultPort;
+    if (argc > 2 ||
+        (argc == 2 && (!parseInteger(argv[1], port) || port < 1 ||
+                       port > 65535))) {
+        std::cerr << "Usage: calendar-server [port 1-65535]\n";
+        return 2;
+    }
+
+    std::ifstream fullFile("workspace/calenderFull.html", std::ios::binary);
+    if (!fullFile) {
+        std::cerr << "Could not open workspace/calenderFull.html. "
+                     "Run this program from the project root.\n";
+        return 1;
+    }
+    const std::string fullPage((std::istreambuf_iterator<char>(fullFile)),
+                               std::istreambuf_iterator<char>());
+    std::ifstream dayFile("workspace/calenderDay.html", std::ios::binary);
+    if (!dayFile) {
+        std::cerr << "Could not open workspace/calenderDay.html. "
+                     "Run this program from the project root.\n";
+        return 1;
+    }
+    const std::string dayPage((std::istreambuf_iterator<char>(dayFile)),
+                              std::istreambuf_iterator<char>());
+
+    const int server = socket(AF_INET, SOCK_STREAM, 0);
+    if (server < 0) {
+        std::cerr << "socket failed: " << std::strerror(errno) << '\n';
+        return 1;
+    }
+
+    int reuseAddress = 1;
+    if (setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &reuseAddress,
+                   sizeof(reuseAddress)) < 0) {
+        std::cerr << "setsockopt failed: " << std::strerror(errno) << '\n';
+        close(server);
+        return 1;
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    address.sin_port = htons(static_cast<unsigned short>(port));
+
+    if (bind(server, reinterpret_cast<sockaddr*>(&address), sizeof(address)) <
+        0) {
+        std::cerr << "Could not bind to port " << port << ": "
+                  << std::strerror(errno) << '\n';
+        close(server);
+        return 1;
+    }
+    if (listen(server, 10) < 0) {
+        std::cerr << "listen failed: " << std::strerror(errno) << '\n';
+        close(server);
+        return 1;
+    }
+
+    std::cout << "Serving at http://localhost:" << port
+              << "/calender.html (press Ctrl+C to stop)\n";
+
+    while (true) {
+        const int client = accept(server, nullptr, nullptr);
+        if (client < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            std::cerr << "accept failed: " << std::strerror(errno) << '\n';
+            close(server);
+            return 1;
+        }
+        handleClient(client, fullPage, dayPage);
+        close(client);
+    }
+}

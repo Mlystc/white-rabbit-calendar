@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<meta name="theme-color" content="#f6f7fb">
+	<title>Day view | Daylight</title>
+	<style>
+		:root {
+			color-scheme: light;
+			--ink: #202338;
+			--muted: #898da1;
+			--line: #eceef4;
+			--purple: #6b62dc;
+			--surface: #fff;
+			--canvas: #f6f7fb;
+		}
+		* { box-sizing: border-box; }
+		body {
+			margin: 0;
+			min-height: 100vh;
+			padding: 30px 36px;
+			background: var(--canvas);
+			color: var(--ink);
+			font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		}
+		main { max-width: 900px; margin: 0 auto; }
+		.back-link {
+			display: inline-flex;
+			align-items: center;
+			gap: 8px;
+			margin-bottom: 24px;
+			color: var(--purple);
+			font-weight: 650;
+			text-decoration: none;
+		}
+		.back-link:hover { text-decoration: underline; }
+		.day-card {
+			padding: 30px;
+			background: var(--surface);
+			border: 1px solid #e9ebf2;
+			border-radius: 14px;
+			box-shadow: 0 5px 22px #29304a08;
+		}
+		.eyebrow {
+			margin: 0 0 8px;
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 750;
+			letter-spacing: 1px;
+			text-transform: uppercase;
+		}
+		h1 { margin: 0; font-size: clamp(26px, 5vw, 36px); }
+		.message { margin: 18px 0 0; color: var(--muted); }
+		.day-events { display: grid; gap: 9px; margin: 20px 0 0; padding: 0; list-style: none; }
+		.day-event { padding: 11px 14px; border-left: 4px solid; border-radius: 6px; font-weight: 600; }
+		.day-event.purple { color: #574fc1; background: #efedff; border-color: #756ce5; }
+		.day-event.blue { color: #3277b8; background: #e8f3ff; border-color: #5a9ee8; }
+		.day-event.orange { color: #a66a1f; background: #fff3e1; border-color: #e6a14e; }
+		.schedule-button {
+			margin-top: 22px;
+			padding: 10px 15px;
+			color: white;
+			background: var(--purple);
+			border: 0;
+			border-radius: 8px;
+			font: inherit;
+			font-weight: 650;
+			cursor: pointer;
+		}
+		.schedule-button:disabled { opacity: .6; cursor: wait; }
+		.schedule-result { margin-top: 20px; }
+		.schedule-result h2 { margin: 18px 0 8px; font-size: 16px; }
+		.schedule-result ul { margin: 0; padding-left: 20px; }
+		@media (max-width: 600px) {
+			body { padding: 20px 12px; }
+			.day-card { padding: 22px; }
+		}
+	</style>
+</head>
+<body>
+	<main>
+		<a class="back-link" href="calenderFull.html">← Back to calendar</a>
+		<section class="day-card" aria-labelledby="dayTitle">
+			<p class="eyebrow">Day view</p>
+			<h1 id="dayTitle">Loading date…</h1>
+			<p class="message" id="dayMessage"></p>
+			<ul class="day-events" id="dayEvents" aria-label="Events for this day"></ul>
+			<button class="schedule-button" id="scheduleButton" type="button" disabled>I'm late — reschedule remaining time</button>
+			<div class="schedule-result" id="scheduleResult" role="status" aria-live="polite"></div>
+		</section>
+	</main>
+	<script>
+		const params = new URLSearchParams(window.location.search);
+		const dateValue = params.get('date') || '';
+		const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateValue);
+		const title = document.getElementById('dayTitle');
+		const message = document.getElementById('dayMessage');
+		const eventList = document.getElementById('dayEvents');
+		const scheduleButton = document.getElementById('scheduleButton');
+		const scheduleResult = document.getElementById('scheduleResult');
+
+		if (match) {
+			const [, year, month, day] = match;
+			const date = new Date(Number(year), Number(month) - 1, Number(day));
+			if (date.getFullYear() === Number(year) &&
+				date.getMonth() === Number(month) - 1 &&
+				date.getDate() === Number(day)) {
+				title.textContent = date.toLocaleDateString(undefined, {
+					weekday: 'long',
+					month: 'long',
+					day: 'numeric',
+					year: 'numeric'
+				});
+				const events = JSON.parse(localStorage.getItem('calendarEvents') || '[]');
+				const dayEvents = events.filter(event => event.date === dateValue);
+				scheduleButton.disabled = false;
+				if (dayEvents.length === 0) {
+					message.textContent = 'No tasks scheduled.';
+				} else {
+					message.textContent = `${dayEvents.length} task${dayEvents.length === 1 ? '' : 's'}`;
+					dayEvents.forEach(event => {
+						const item = document.createElement('li');
+						item.className = `day-event ${event.color}`;
+						const duration = Number.isInteger(event.durationMinutes)
+							? ` — ${event.durationMinutes} min`
+							: '';
+						item.textContent = `${event.title}${duration}`;
+						eventList.appendChild(item);
+					});
+				}
+
+				scheduleButton.addEventListener('click', async () => {
+					const priorities = new Set(['mustDo', 'shrinkable', 'movable']);
+					const tasks = dayEvents.filter(event =>
+						typeof event.title === 'string' &&
+						Number.isInteger(event.durationMinutes) &&
+						event.durationMinutes > 0 &&
+						priorities.has(event.priority)
+					);
+					const dayStart = new Date(
+						Number(year), Number(month) - 1, Number(day)
+					);
+					const dayEnd = new Date(
+						Number(year), Number(month) - 1, Number(day) + 1
+					);
+					const form = new URLSearchParams({
+						dayStart: String(Math.floor(dayStart.getTime() / 1000)),
+						dayEnd: String(Math.floor(dayEnd.getTime() / 1000)),
+						taskCount: String(tasks.length)
+					});
+					tasks.forEach((task, index) => {
+						form.append(`title_${index}`, task.title);
+						form.append(`duration_${index}`, String(task.durationMinutes));
+						form.append(`priority_${index}`, task.priority);
+					});
+
+					scheduleButton.disabled = true;
+					scheduleResult.textContent = 'Replanning tasks…';
+					try {
+						const response = await fetch('/api/schedule', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+							body: form.toString()
+						});
+						const plan = await response.json();
+						if (!response.ok) {
+							throw new Error(plan.error || 'The server could not schedule the tasks.');
+						}
+						renderSchedule(plan);
+					} catch (error) {
+						scheduleResult.textContent = `Could not reschedule tasks: ${error.message}`;
+					} finally {
+						scheduleButton.disabled = false;
+					}
+				});
+			} else {
+				title.textContent = 'Invalid date';
+				message.textContent = 'The date in the URL is not valid.';
+			}
+		} else {
+			title.textContent = 'No date selected';
+			message.textContent = 'Choose a date from the full calendar.';
+		}
+
+		function renderSchedule(plan) {
+			scheduleResult.replaceChildren();
+			const availableHours = Math.floor(plan.availableMinutes / 60);
+			const availableMinutes = plan.availableMinutes % 60;
+			const summary = document.createElement('p');
+			summary.textContent = `Available for this day: ${availableHours}h ${availableMinutes}m.`;
+			scheduleResult.appendChild(summary);
+
+			if (plan.scheduled.length === 0 && plan.unscheduled.length === 0) {
+				const empty = document.createElement('p');
+				empty.textContent = 'There are no tasks with a duration and priority to schedule.';
+				scheduleResult.appendChild(empty);
+			}
+
+			if (plan.scheduled.length > 0) {
+				const heading = document.createElement('h2');
+				heading.textContent = 'Updated plan';
+				scheduleResult.appendChild(heading);
+				const list = document.createElement('ul');
+				plan.scheduled.forEach(task => {
+					const item = document.createElement('li');
+					item.textContent = `${formatClock(task.start)}–${formatClock(task.end)}: ${task.title} (${task.priority}, ${task.durationMinutes} min)`;
+					list.appendChild(item);
+				});
+				scheduleResult.appendChild(list);
+			}
+
+			if (plan.unscheduled.length > 0) {
+				const heading = document.createElement('h2');
+				heading.textContent = 'Did not fit today';
+				scheduleResult.appendChild(heading);
+				const list = document.createElement('ul');
+				plan.unscheduled.forEach(task => {
+					const item = document.createElement('li');
+					item.textContent = `${task.title} (${task.priority}, ${task.durationMinutes} min)`;
+					list.appendChild(item);
+				});
+				scheduleResult.appendChild(list);
+			}
+		}
+
+		function formatClock(timestamp) {
+			return new Date(timestamp * 1000).toLocaleTimeString(undefined, {
+				hour: '2-digit',
+				minute: '2-digit',
+				hourCycle: 'h23'
+			});
+		}
+	</script>
+</body>
+</html>
