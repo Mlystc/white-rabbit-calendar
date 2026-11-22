@@ -30,6 +30,17 @@ struct HttpRequest {
     std::string body;
 };
 
+struct StaticAsset {
+    std::string body;
+    std::string contentType;
+};
+
+struct StaticAssetPath {
+    const char* url;
+    const char* file;
+    const char* contentType;
+};
+
 bool sendAll(int client, const std::string& data) {
     std::size_t sent = 0;
     while (sent < data.size()) {
@@ -312,7 +323,7 @@ void handleSchedule(int client, const std::string& body) {
                     "application/json; charset=utf-8");
             return;
         }
-        tasks.push_back({title->second, durationMinutes, taskPriority, dayEnd});
+        tasks.push_back({i, title->second, durationMinutes, taskPriority, dayEnd, false});
     }
 
     try {
@@ -335,7 +346,8 @@ void handleSchedule(int client, const std::string& body) {
 
 void handleClient(int client, const std::string& fullPage,
                   const std::string& dayPage,
-                  const std::string& styles) {
+                  const std::string& styles,
+                  const std::unordered_map<std::string, StaticAsset>& assets) {
     HttpRequest request;
     if (!receiveRequest(client, request)) {
         respond(client, "400 Bad Request", "Invalid request");
@@ -359,6 +371,9 @@ void handleClient(int client, const std::string& fullPage,
         respond(client, "200 OK", dayPage);
     } else if (request.path == "/styles/styles.css") {
         respond(client, "200 OK", styles, "text/css; charset=utf-8");
+    } else if (assets.count(request.path) != 0) {
+        const StaticAsset& asset = assets.at(request.path);
+        respond(client, "200 OK", asset.body, asset.contentType);
     } else {
         respond(client, "404 Not Found", "Not found");
     }
@@ -398,6 +413,27 @@ int main(int argc, char* argv[]) {
     }
     const std::string styles((std::istreambuf_iterator<char>(stylesFile)),
                              std::istreambuf_iterator<char>());
+
+    const std::vector<StaticAssetPath> assetPaths = {
+        {"/styles/images/teatime.jpg", "styles/images/teatime.jpg", "image/jpeg"},
+        {"/styles/images/hurry.jpg", "styles/images/hurry.jpg", "image/jpeg"},
+        {"/styles/images/il_fullxfull.1418067569_fv1a.webp",
+         "styles/images/il_fullxfull.1418067569_fv1a.webp", "image/webp"}
+    };
+    std::unordered_map<std::string, StaticAsset> assets;
+    for (const StaticAssetPath& assetPath : assetPaths) {
+        std::ifstream assetFile(assetPath.file, std::ios::binary);
+        if (!assetFile) {
+            std::cerr << "Could not open " << assetPath.file
+                      << ". Run this program from the project root.\n";
+            return 1;
+        }
+        assets.emplace(assetPath.url, StaticAsset{
+            std::string(std::istreambuf_iterator<char>(assetFile),
+                        std::istreambuf_iterator<char>()),
+            assetPath.contentType
+        });
+    }
 
     const int server = socket(AF_INET, SOCK_STREAM, 0);
     if (server < 0) {
@@ -444,7 +480,7 @@ int main(int argc, char* argv[]) {
             close(server);
             return 1;
         }
-        handleClient(client, fullPage, dayPage, styles);
+        handleClient(client, fullPage, dayPage, styles, assets);
         close(client);
     }
 }

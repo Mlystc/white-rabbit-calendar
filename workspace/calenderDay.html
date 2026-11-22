@@ -3,20 +3,28 @@
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<meta name="theme-color" content="#f6f7fb">
+	<meta name="theme-color" content="#f3ead7">
 	<link rel="stylesheet" href="/styles/styles.css">
-	<title>Day view | White Rabbit Calendar</title>
+	<title>White Rabbit Calendar | Day view</title>
 </head>
 <body class="day-view">
 	<main>
 		<a class="back-link" href="/">← Back to calendar</a>
 		<section class="day-card" aria-labelledby="dayTitle">
-			<p class="eyebrow">Day view</p>
-			<h1 id="dayTitle">Loading date…</h1>
+			<header class="day-heading">
+				<div>
+					<p class="eyebrow">A very important date</p>
+					<h1 id="dayTitle">Loading date…</h1>
+				</div>
+				<figure class="day-poster">
+					<img src="/styles/images/hurry.jpg" alt="The White Rabbit hurries along with his pocket watch">
+					<figcaption>Always on the clock</figcaption>
+				</figure>
+			</header>
 			<p class="message" id="dayMessage"></p>
 			<div class="day-controls">
 				<label for="startTime">Start time</label>
-				<input id="startTime" type="time" value="09:00" step="900">
+				<input id="startTime" type="time" value="09:00" step="300">
 				<button class="schedule-button" id="scheduleButton" type="button" disabled>I'm late — reschedule remaining time</button>
 			</div>
 			<div class="timeline" id="timeline" aria-label="Timeline for this day">
@@ -36,6 +44,14 @@
 				</section>
 			</div>
 			<div class="schedule-result" id="scheduleResult" role="status" aria-live="polite"></div>
+			<section class="unscheduled-panel" id="unscheduledPanel" aria-labelledby="unscheduledHeading">
+				<h2 id="unscheduledHeading">Unscheduled</h2>
+				<ul id="unscheduledTasks" aria-label="Unscheduled tasks"></ul>
+			</section>
+			<section class="completed-panel" id="completedPanel" aria-labelledby="completedHeading">
+				<h2 id="completedHeading">Completed</h2>
+				<ul id="completedTasks" aria-label="Completed tasks"></ul>
+			</section>
 		</section>
 	</main>
 	<script>
@@ -47,20 +63,139 @@
 		const scheduleButton = document.getElementById('scheduleButton');
 		const scheduleResult = document.getElementById('scheduleResult');
 		const startTimeInput = document.getElementById('startTime');
+		const unscheduledPanel = document.getElementById('unscheduledPanel');
+		const unscheduledTasks = document.getElementById('unscheduledTasks');
+		const completedTasks = document.getElementById('completedTasks');
 		const timelinePeriods = [
 			{ startMinute: 0, endMinute: 12 * 60, hours: document.getElementById('morningHours'), grid: document.getElementById('morningGrid') },
 			{ startMinute: 12 * 60, endMinute: 24 * 60, hours: document.getElementById('afternoonHours'), grid: document.getElementById('afternoonGrid') }
 		];
+		const taskTooltip = document.createElement('div');
+		taskTooltip.className = 'timeline-task-tooltip';
+		taskTooltip.id = 'timelineTaskTooltip';
+		taskTooltip.setAttribute('role', 'tooltip');
+		taskTooltip.setAttribute('aria-hidden', 'true');
+		const taskTooltipTitle = document.createElement('span');
+		const taskTooltipTime = document.createElement('span');
+		taskTooltip.append(taskTooltipTitle, taskTooltipTime);
+		document.body.appendChild(taskTooltip);
 		const pixelsPerHour = 64;
 		let dayEvents = [];
 		let allEvents = [];
+		let draggedEventIndex = null;
+		let tooltipBlock = null;
 		let dayYear = 0;
 		let dayMonth = 0;
 		let dayNumber = 0;
 		let dateValueKey = '';
 
+		function showTaskTooltip(block) {
+			tooltipBlock = block;
+			taskTooltipTitle.textContent = block.querySelector('.timeline-task-title').textContent;
+			taskTooltipTime.textContent = block.querySelector('.timeline-task-time').textContent;
+			taskTooltip.style.visibility = 'hidden';
+			taskTooltip.classList.add('visible');
+			taskTooltip.setAttribute('aria-hidden', 'false');
+
+			const blockRect = block.getBoundingClientRect();
+			const tooltipRect = taskTooltip.getBoundingClientRect();
+			const gap = 8;
+			const preferredLeft = blockRect.right + gap + tooltipRect.width <= window.innerWidth - gap
+				? blockRect.right + gap
+				: blockRect.left - tooltipRect.width - gap;
+			taskTooltip.style.left = `${Math.max(gap, Math.min(preferredLeft, window.innerWidth - tooltipRect.width - gap))}px`;
+			taskTooltip.style.top = `${Math.max(gap, Math.min(blockRect.top, window.innerHeight - tooltipRect.height - gap))}px`;
+			taskTooltip.style.visibility = 'visible';
+		}
+
+		function hideTaskTooltip(block) {
+			if (block && tooltipBlock !== block) return;
+			tooltipBlock = null;
+			taskTooltip.classList.remove('visible');
+			taskTooltip.setAttribute('aria-hidden', 'true');
+		}
+
 		function saveEvents() {
 			localStorage.setItem('calendarEvents', JSON.stringify(allEvents));
+		}
+
+		function isActiveScheduledTask(task) {
+			return !task.completed && !task.unscheduled &&
+				Number.isInteger(task.startMinute) &&
+				Number.isInteger(task.durationMinutes) &&
+				task.durationMinutes > 0;
+		}
+
+		function completeTask(task) {
+			if (!task || task.completed) return;
+			const completedStart = isActiveScheduledTask(task) ? task.startMinute : null;
+			task.completed = true;
+			task.completedStartMinute = completedStart;
+			delete task.startMinute;
+			delete task.unscheduled;
+
+			if (completedStart !== null) {
+				const upcomingTasks = dayEvents
+					.filter(other => isActiveScheduledTask(other) && other.startMinute >= completedStart)
+					.sort((a, b) =>
+						a.startMinute - b.startMinute ||
+						priorityRank(a.priority) - priorityRank(b.priority)
+					);
+				let cursor = completedStart;
+				upcomingTasks.forEach(upcomingTask => {
+					upcomingTask.startMinute = cursor;
+					cursor += upcomingTask.durationMinutes;
+				});
+			}
+
+			saveEvents();
+			renderInitialTimeline();
+			renderUnscheduledTasks();
+			renderCompletedTasks();
+			message.textContent = `${task.title} completed.`;
+		}
+
+		function uncompleteTask(task) {
+			if (!task || !task.completed) return;
+			const restoredStart = Number.isInteger(task.completedStartMinute)
+				? task.completedStartMinute
+				: null;
+			task.completed = false;
+			delete task.completed;
+			delete task.completedStartMinute;
+
+			delete task.unscheduled;
+			const activeTasks = dayEvents
+				.filter(other => isActiveScheduledTask(other) || other === task)
+				.filter(other => Number.isInteger(other.durationMinutes) && other.durationMinutes > 0);
+
+			const orderStart = activeTask => {
+				if (activeTask === task) return restoredStart ?? Infinity;
+				return Number.isInteger(activeTask.startMinute) ? activeTask.startMinute : Infinity;
+			};
+			activeTasks.sort((a, b) => {
+				const priorityDifference = priorityRank(a.priority) - priorityRank(b.priority);
+				return priorityDifference || orderStart(a) - orderStart(b);
+			});
+
+			const allowedStart = earliestAllowedStartMinute();
+			const scheduleStart = allowedStart >= 24 * 60 ? startMinutes() : Math.max(startMinutes(), allowedStart);
+			let cursor = Math.ceil(scheduleStart / 5) * 5;
+			activeTasks.forEach(activeTask => {
+				if (cursor + activeTask.durationMinutes > 24 * 60) {
+					delete activeTask.startMinute;
+					activeTask.unscheduled = true;
+					return;
+				}
+				activeTask.startMinute = cursor;
+				delete activeTask.unscheduled;
+				cursor += activeTask.durationMinutes;
+			});
+			saveEvents();
+			renderInitialTimeline();
+			renderUnscheduledTasks();
+			renderCompletedTasks();
+			message.textContent = `${task.title} restored.`;
 		}
 
 		function startMinutes() {
@@ -105,7 +240,7 @@
 			if (selectedDate > today) return 0;
 			const now = new Date();
 			const currentMinute = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
-			return Math.ceil(currentMinute / 15) * 15;
+			return Math.ceil(currentMinute / 5) * 5;
 		}
 
 		function renderTimelineHours() {
@@ -133,7 +268,7 @@
 			const unpositionedEvents = [];
 			dayEvents.forEach(event => {
 				const duration = Number(event.durationMinutes);
-				if (!Number.isInteger(duration) || duration <= 0 || event.unscheduled) return;
+				if (!Number.isInteger(duration) || duration <= 0 || event.unscheduled || event.completed) return;
 				if (Number.isInteger(event.startMinute) &&
 					event.startMinute >= 0 &&
 					event.startMinute < 24 * 60) {
@@ -152,39 +287,253 @@
 			if (unpositionedEvents.length > 0) saveEvents();
 		}
 
+		function renderUnscheduledTasks() {
+			unscheduledTasks.replaceChildren();
+			dayEvents.filter(task => task.unscheduled && !task.completed).forEach(task => {
+				const item = document.createElement('li');
+				const priorityClass = ['mustDo', 'shouldDo', 'couldDo'].includes(task.priority)
+					? task.priority
+					: 'unprioritized';
+				item.className = `unscheduled-task priority-${priorityClass}`;
+				const checkbox = document.createElement('input');
+				checkbox.type = 'checkbox';
+				checkbox.className = 'task-completion-checkbox';
+				checkbox.setAttribute('aria-label', `Mark ${task.title} completed`);
+				checkbox.addEventListener('change', () => completeTask(task));
+				const text = document.createElement('span');
+				text.textContent = `${task.title} (${task.priority || 'unprioritized'}, ${task.durationMinutes} min)`;
+				item.append(checkbox, text);
+				const eventIndex = allEvents.indexOf(task);
+				if (eventIndex !== -1) {
+					item.draggable = true;
+					item.dataset.eventIndex = eventIndex;
+					item.addEventListener('dragstart', dragEvent => {
+						draggedEventIndex = eventIndex;
+						dragEvent.dataTransfer.setData('text/plain', String(eventIndex));
+						dragEvent.dataTransfer.effectAllowed = 'move';
+					});
+					item.addEventListener('dragend', () => {
+						draggedEventIndex = null;
+						unscheduledPanel.classList.remove('drop-target');
+						timelinePeriods.forEach(period => period.grid.classList.remove('drop-target'));
+						renderInitialTimeline();
+					});
+				}
+				unscheduledTasks.appendChild(item);
+			});
+		}
+
+		function renderCompletedTasks() {
+			completedTasks.replaceChildren();
+			dayEvents.filter(task => task.completed).forEach(task => {
+				const item = document.createElement('li');
+				item.className = 'completed-task';
+				const checkbox = document.createElement('input');
+				checkbox.type = 'checkbox';
+				checkbox.className = 'task-completion-checkbox';
+				checkbox.checked = true;
+				checkbox.setAttribute('aria-label', `Restore ${task.title}`);
+				checkbox.addEventListener('change', () => uncompleteTask(task));
+				const text = document.createElement('span');
+				text.textContent = task.title;
+				item.append(checkbox, text);
+				completedTasks.appendChild(item);
+			});
+		}
+
 		function renderTaskBlock(task, startMinute, durationMinutes, priority) {
 			const endMinute = startMinute + durationMinutes;
-			const priorityClass = ['mustDo', 'shouldDo', 'couldDo'].includes(priority) ? priority : 'unprioritized';
 			timelinePeriods.forEach(period => {
 				const clampedStart = Math.max(startMinute, period.startMinute);
 				const clampedEnd = Math.min(endMinute, period.endMinute);
 				if (clampedEnd <= clampedStart) return;
-				const block = document.createElement('div');
-				block.className = `timeline-task priority-${priorityClass}`;
-				block.style.top = `${((clampedStart - period.startMinute) / 60) * pixelsPerHour}px`;
-				block.style.height = `${Math.max(((clampedEnd - clampedStart) / 60) * pixelsPerHour - 4, 28)}px`;
-				block.dataset.priority = priority || '';
-				const eventIndex = allEvents.indexOf(task);
-				if (eventIndex !== -1) {
-					block.draggable = true;
-					block.dataset.eventIndex = eventIndex;
-					block.addEventListener('dragstart', event => {
-						event.dataTransfer.setData('text/plain', String(eventIndex));
-						event.dataTransfer.effectAllowed = 'move';
-						block.dataset.dragging = 'true';
-					});
-					block.addEventListener('dragend', () => {
-						delete block.dataset.dragging;
-					});
+				createTimelineTaskBlock(task, period, clampedStart, clampedEnd, priority);
+			});
+		}
+
+		function createTimelineTaskBlock(task, period, startMinute, endMinute, priority) {
+			const priorityClass = ['mustDo', 'shouldDo', 'couldDo'].includes(priority) ? priority : 'unprioritized';
+			const block = document.createElement('div');
+			block.className = `timeline-task priority-${priorityClass}`;
+			block.style.top = `${((startMinute - period.startMinute) / 60) * pixelsPerHour}px`;
+			block.style.height = `${Math.max(((endMinute - startMinute) / 60) * pixelsPerHour - 4, 28)}px`;
+			block.dataset.priority = priority || '';
+			const eventIndex = allEvents.indexOf(task);
+			if (eventIndex !== -1) {
+				block.draggable = true;
+				block.dataset.eventIndex = eventIndex;
+				block.addEventListener('dragstart', event => {
+					draggedEventIndex = eventIndex;
+					event.dataTransfer.setData('text/plain', String(eventIndex));
+					event.dataTransfer.effectAllowed = 'move';
+					block.dataset.dragging = 'true';
+				});
+				block.addEventListener('dragend', () => {
+					delete block.dataset.dragging;
+					draggedEventIndex = null;
+					unscheduledPanel.classList.remove('drop-target');
+					timelinePeriods.forEach(item => item.grid.classList.remove('drop-target'));
+					renderInitialTimeline();
+				});
+			}
+			const completionCheckbox = document.createElement('input');
+			completionCheckbox.type = 'checkbox';
+			completionCheckbox.className = 'task-completion-checkbox timeline-task-checkbox';
+			completionCheckbox.setAttribute('aria-label', `Mark ${task.title} completed`);
+			completionCheckbox.addEventListener('pointerdown', event => event.stopPropagation());
+			completionCheckbox.addEventListener('dragstart', event => event.preventDefault());
+			completionCheckbox.addEventListener('change', () => completeTask(task));
+			const title = document.createElement('span');
+			title.className = 'timeline-task-title';
+			title.textContent = task.title;
+			const time = document.createElement('span');
+			time.className = 'timeline-task-time';
+			time.textContent = `${formatClockMinutes(startMinute)}–${formatClockMinutes(endMinute)}`;
+			block.append(completionCheckbox, title, time);
+			block.tabIndex = 0;
+			block.setAttribute('aria-describedby', 'timelineTaskTooltip');
+			block.addEventListener('mouseenter', () => showTaskTooltip(block));
+			block.addEventListener('mouseleave', () => hideTaskTooltip(block));
+			block.addEventListener('focus', () => showTaskTooltip(block));
+			block.addEventListener('blur', () => hideTaskTooltip(block));
+			block.addEventListener('dragstart', () => hideTaskTooltip(block));
+			period.grid.appendChild(block);
+		}
+
+		function getTaskPlacements(task, period, clientY, enforceEarliestStart = true) {
+			const rect = period.grid.getBoundingClientRect();
+			const offsetMinutes = Math.max(0, Math.min(
+				period.endMinute - period.startMinute,
+				(clientY - rect.top) / pixelsPerHour * 60
+			));
+			const snappedStart = period.startMinute + Math.round(offsetMinutes / 5) * 5;
+			const earliestStart = enforceEarliestStart ? earliestAllowedStartMinute() : 0;
+			const taskPriority = priorityRank(task.priority);
+			const latestHigherPriorityEnd = dayEvents.reduce((latestEnd, other) => {
+				if (other === task || other.unscheduled || other.completed ||
+					priorityRank(other.priority) >= taskPriority ||
+					!Number.isInteger(other.startMinute) ||
+					!Number.isInteger(other.durationMinutes) ||
+					other.durationMinutes <= 0) return latestEnd;
+				return Math.max(latestEnd, other.startMinute + other.durationMinutes);
+			}, 0);
+			if (Math.max(snappedStart, earliestStart) < latestHigherPriorityEnd) {
+				return { error: 'Lower-priority tasks must be placed after higher-priority tasks.' };
+			}
+			const orderedTasks = dayEvents
+				.filter(other => other === task || (
+					!other.unscheduled && !other.completed &&
+					Number.isInteger(other.durationMinutes) &&
+					other.durationMinutes > 0 &&
+					Number.isInteger(other.startMinute)
+				))
+				.map((other, index) => ({
+					task: other,
+					requestedStart: other === task ? Math.max(snappedStart, earliestStart) : other.startMinute,
+					orderStart: other === task ? snappedStart : other.startMinute,
+					order: index
+				}));
+			if (!orderedTasks.some(item => item.task === task)) {
+				orderedTasks.push({
+					task,
+					requestedStart: Math.max(snappedStart, earliestStart),
+					orderStart: snappedStart,
+					order: orderedTasks.length
+				});
+			}
+			orderedTasks.sort((a, b) =>
+				priorityRank(a.task.priority) - priorityRank(b.task.priority) ||
+				a.orderStart - b.orderStart ||
+				(a.task === task ? -1 : b.task === task ? 1 : 0) ||
+				a.order - b.order
+			);
+
+			let cursor = 0;
+			const placements = [];
+			for (const item of orderedTasks) {
+				const startMinute = Math.max(cursor, item.requestedStart);
+				if (startMinute + item.task.durationMinutes > 24 * 60) {
+					return { error: 'There is not enough time left today to move these tasks.' };
 				}
-				const title = document.createElement('span');
-				title.className = 'timeline-task-title';
-				title.textContent = task.title;
-				const time = document.createElement('span');
-				time.className = 'timeline-task-time';
-				time.textContent = `${formatClockMinutes(clampedStart)}–${formatClockMinutes(clampedEnd)}`;
-				block.append(title, time);
-				period.grid.appendChild(block);
+				placements.push({ task: item.task, startMinute });
+				cursor = startMinute + item.task.durationMinutes;
+			}
+			return { placements };
+		}
+
+		function restoreTaskPlacementPreview() {
+			timelinePeriods.forEach(period => {
+				period.grid.querySelectorAll('.timeline-task-preview').forEach(preview => preview.remove());
+			});
+			dayEvents.forEach(task => {
+				const eventIndex = allEvents.indexOf(task);
+				timelinePeriods.forEach(period => {
+					const block = period.grid.querySelector(`.timeline-task[data-event-index="${eventIndex}"]`);
+					if (task.unscheduled || task.completed || !Number.isInteger(task.startMinute) ||
+						!Number.isInteger(task.durationMinutes) || task.durationMinutes <= 0) {
+						block?.remove();
+						return;
+					}
+					const clampedStart = Math.max(task.startMinute, period.startMinute);
+					const clampedEnd = Math.min(task.startMinute + task.durationMinutes, period.endMinute);
+					if (clampedEnd <= clampedStart) {
+						block?.remove();
+						return;
+					}
+					if (!block) {
+						createTimelineTaskBlock(task, period, clampedStart, clampedEnd, task.priority);
+						return;
+					}
+					block.style.top = `${((clampedStart - period.startMinute) / 60) * pixelsPerHour}px`;
+					block.style.height = `${Math.max(((clampedEnd - clampedStart) / 60) * pixelsPerHour - 4, 28)}px`;
+					block.querySelector('.timeline-task-time').textContent =
+						`${formatClockMinutes(clampedStart)}–${formatClockMinutes(clampedEnd)}`;
+				});
+			});
+		}
+
+		function previewTaskPlacements(placements) {
+			timelinePeriods.forEach(period => {
+				period.grid.querySelectorAll('.timeline-task-preview').forEach(preview => preview.remove());
+			});
+			placements.forEach(({ task, startMinute }) => {
+				const eventIndex = allEvents.indexOf(task);
+				const isDraggedTask = eventIndex === draggedEventIndex;
+				timelinePeriods.forEach(period => {
+					const block = period.grid.querySelector(`.timeline-task[data-event-index="${eventIndex}"]`);
+					const clampedStart = Math.max(startMinute, period.startMinute);
+					const clampedEnd = Math.min(startMinute + task.durationMinutes, period.endMinute);
+					if (clampedEnd <= clampedStart) {
+						if (!isDraggedTask) block?.remove();
+						return;
+					}
+					if (isDraggedTask) {
+						const priorityClass = ['mustDo', 'shouldDo', 'couldDo'].includes(task.priority)
+							? task.priority
+							: 'unprioritized';
+						const preview = document.createElement('div');
+						preview.className = `timeline-task timeline-task-preview priority-${priorityClass}`;
+						preview.style.top = `${((clampedStart - period.startMinute) / 60) * pixelsPerHour}px`;
+						preview.style.height = `${Math.max(((clampedEnd - clampedStart) / 60) * pixelsPerHour - 4, 28)}px`;
+						const title = document.createElement('span');
+						title.className = 'timeline-task-title';
+						title.textContent = task.title;
+						const time = document.createElement('span');
+						time.className = 'timeline-task-time';
+						time.textContent = `${formatClockMinutes(clampedStart)}–${formatClockMinutes(clampedEnd)}`;
+						preview.append(title, time);
+						period.grid.appendChild(preview);
+						return;
+					}
+					if (!block) {
+						createTimelineTaskBlock(task, period, clampedStart, clampedEnd, task.priority);
+						return;
+					}
+					block.style.top = `${((clampedStart - period.startMinute) / 60) * pixelsPerHour}px`;
+					block.style.height = `${Math.max(((clampedEnd - clampedStart) / 60) * pixelsPerHour - 4, 28)}px`;
+					block.querySelector('.timeline-task-time').textContent =
+						`${formatClockMinutes(clampedStart)}–${formatClockMinutes(clampedEnd)}`;
+				});
 			});
 		}
 
@@ -196,81 +545,65 @@
 			const eventIndex = Number(draggedIndex);
 			const task = allEvents[eventIndex];
 			if (!task || task.date !== dateValueKey || !Number.isInteger(task.durationMinutes) ||
-				task.durationMinutes <= 0) return;
+				task.durationMinutes <= 0 || task.completed) return;
 
-			const rank = priorityRank(task.priority);
-			const hasUnscheduledHigherPriorityTask = dayEvents.some(other =>
-				other !== task &&
-				other.unscheduled &&
-				priorityRank(other.priority) < rank
-			);
-			if (hasUnscheduledHigherPriorityTask) {
-				message.textContent = 'Place higher-priority tasks first.';
+			const result = getTaskPlacements(task, period, event.clientY);
+			if (result.error) {
+				message.textContent = result.error;
 				return;
 			}
 
-			const minimumStart = dayEvents.reduce((latestEnd, other) => {
-				if (other === task || other.unscheduled ||
-					priorityRank(other.priority) >= rank ||
-					!Number.isInteger(other.startMinute) ||
-					!Number.isInteger(other.durationMinutes) ||
-					other.durationMinutes <= 0) return latestEnd;
-				return Math.max(latestEnd, other.startMinute + other.durationMinutes);
-			}, earliestAllowedStartMinute());
-			const maximumStart = dayEvents.reduce((earliestStart, other) => {
-				if (other === task || other.unscheduled ||
-					priorityRank(other.priority) <= rank ||
-					!Number.isInteger(other.startMinute)) return earliestStart;
-				return Math.min(earliestStart, other.startMinute - task.durationMinutes);
-			}, 24 * 60 - task.durationMinutes);
-			if (minimumStart > maximumStart) {
-				message.textContent = 'There is not enough room for this task at its priority level after the current time.';
-				return;
-			}
-
-			const rect = period.grid.getBoundingClientRect();
-			const offsetMinutes = Math.max(0, Math.min(
-				period.endMinute - period.startMinute,
-				(event.clientY - rect.top) / pixelsPerHour * 60
-			));
-			const snappedStart = period.startMinute + Math.round(offsetMinutes / 15) * 15;
-			const nextStart = Math.max(minimumStart, Math.min(snappedStart, maximumStart));
-			const overlapsTask = dayEvents.some(other =>
-				other !== task &&
-				!other.unscheduled &&
-				Number.isInteger(other.startMinute) &&
-				Number.isInteger(other.durationMinutes) &&
-				other.durationMinutes > 0 &&
-				nextStart < other.startMinute + other.durationMinutes &&
-				nextStart + task.durationMinutes > other.startMinute
-			);
-			if (overlapsTask) {
-				message.textContent = 'That time overlaps another task.';
-				return;
-			}
-
-			task.startMinute = nextStart;
-			delete task.unscheduled;
+			result.placements.forEach(({ task: placedTask, startMinute }) => {
+				placedTask.startMinute = startMinute;
+				delete placedTask.unscheduled;
+			});
 			message.textContent = `${task.title} moved to ${formatClockMinutes(task.startMinute)}.`;
 			saveEvents();
 			renderInitialTimeline();
-
-			const item = scheduleResult.querySelector(`li[data-event-index="${eventIndex}"]`);
-			if (item) {
-				const list = item.parentElement;
-				item.remove();
-				if (list.children.length === 0) {
-					scheduleResult.querySelector('#unscheduledHeading')?.remove();
-					list.remove();
-				}
-			}
+			renderUnscheduledTasks();
 		}
+
+		function dropTaskInUnscheduled(event) {
+			event.preventDefault();
+			unscheduledPanel.classList.remove('drop-target');
+			const draggedIndex = event.dataTransfer.getData('text/plain');
+			if (!/^\d+$/.test(draggedIndex)) return;
+			const task = allEvents[Number(draggedIndex)];
+			if (!task || task.date !== dateValueKey ||
+				!Number.isInteger(task.durationMinutes) || task.durationMinutes <= 0) return;
+
+			delete task.startMinute;
+			task.unscheduled = true;
+			saveEvents();
+			renderInitialTimeline();
+			renderUnscheduledTasks();
+			message.textContent = `${task.title} moved to Unscheduled.`;
+		}
+
+		unscheduledPanel.addEventListener('dragover', event => {
+			event.preventDefault();
+			event.dataTransfer.dropEffect = 'move';
+			unscheduledPanel.classList.add('drop-target');
+		});
+		unscheduledPanel.addEventListener('dragleave', event => {
+			if (!unscheduledPanel.contains(event.relatedTarget)) {
+				unscheduledPanel.classList.remove('drop-target');
+			}
+		});
+		unscheduledPanel.addEventListener('drop', dropTaskInUnscheduled);
 
 		timelinePeriods.forEach(period => {
 			period.grid.addEventListener('dragover', event => {
 				event.preventDefault();
 				event.dataTransfer.dropEffect = 'move';
 				period.grid.classList.add('drop-target');
+				const task = allEvents[draggedEventIndex];
+				if (task && task.date === dateValueKey && Number.isInteger(task.durationMinutes) &&
+					task.durationMinutes > 0) {
+					const result = getTaskPlacements(task, period, event.clientY, false);
+					if (result.placements) previewTaskPlacements(result.placements);
+					else restoreTaskPlacementPreview();
+				}
 			});
 			period.grid.addEventListener('dragleave', event => {
 				if (!period.grid.contains(event.relatedTarget)) {
@@ -306,6 +639,8 @@
 					message.textContent = `${dayEvents.length} task${dayEvents.length === 1 ? '' : 's'}`;
 				}
 				renderInitialTimeline();
+				renderUnscheduledTasks();
+				renderCompletedTasks();
 				startTimeInput.addEventListener('change', () => {
 					localStorage.setItem(`dayStart:${dateValueKey}`, startTimeInput.value);
 					scheduleResult.replaceChildren();
@@ -315,6 +650,8 @@
 				scheduleButton.addEventListener('click', async () => {
 					const priorities = new Set(['mustDo', 'shouldDo', 'couldDo']);
 					const tasks = dayEvents.filter(event =>
+						!event.unscheduled &&
+						!event.completed &&
 						typeof event.title === 'string' &&
 						Number.isInteger(event.durationMinutes) &&
 						event.durationMinutes > 0 &&
@@ -393,6 +730,7 @@
 					const startMinute = start.getHours() * 60 + start.getMinutes();
 					const event = dayEvents.find(item =>
 						!updatedEvents.has(item) &&
+						!item.completed &&
 						item.title === task.title &&
 						item.durationMinutes === task.durationMinutes &&
 						item.priority === task.priority
@@ -407,14 +745,10 @@
 			}
 
 			if (plan.unscheduled.length > 0) {
-				const heading = document.createElement('h2');
-				heading.id = 'unscheduledHeading';
-				heading.textContent = 'Did not fit today';
-				scheduleResult.appendChild(heading);
-				const list = document.createElement('ul');
 				plan.unscheduled.forEach(task => {
 					const event = dayEvents.find(item =>
 						!updatedEvents.has(item) &&
+						!item.completed &&
 						item.title === task.title &&
 						item.durationMinutes === task.durationMinutes &&
 						item.priority === task.priority
@@ -424,22 +758,10 @@
 						event.unscheduled = true;
 						updatedEvents.add(event);
 					}
-					const item = document.createElement('li');
-					item.className = `unscheduled-task priority-${priorityRank(task.priority) < 3 ? task.priority : 'unprioritized'}`;
-					item.textContent = `${task.title} (${task.priority}, ${task.durationMinutes} min)`;
-					const eventIndex = event ? allEvents.indexOf(event) : -1;
-					if (eventIndex !== -1) {
-						item.draggable = true;
-						item.dataset.eventIndex = eventIndex;
-						item.addEventListener('dragstart', dragEvent => {
-							dragEvent.dataTransfer.setData('text/plain', String(eventIndex));
-							dragEvent.dataTransfer.effectAllowed = 'move';
-						});
-					}
-					list.appendChild(item);
 				});
-				scheduleResult.appendChild(list);
 			}
+			renderUnscheduledTasks();
+			renderCompletedTasks();
 			if (updatedEvents.size > 0) saveEvents();
 		}
 
