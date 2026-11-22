@@ -4,89 +4,37 @@
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<meta name="theme-color" content="#f6f7fb">
-	<title>Day view | Daylight</title>
-	<style>
-		:root {
-			color-scheme: light;
-			--ink: #202338;
-			--muted: #898da1;
-			--line: #eceef4;
-			--purple: #6b62dc;
-			--surface: #fff;
-			--canvas: #f6f7fb;
-		}
-		* { box-sizing: border-box; }
-		body {
-			margin: 0;
-			min-height: 100vh;
-			padding: 30px 36px;
-			background: var(--canvas);
-			color: var(--ink);
-			font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-		}
-		main { max-width: 900px; margin: 0 auto; }
-		.back-link {
-			display: inline-flex;
-			align-items: center;
-			gap: 8px;
-			margin-bottom: 24px;
-			color: var(--purple);
-			font-weight: 650;
-			text-decoration: none;
-		}
-		.back-link:hover { text-decoration: underline; }
-		.day-card {
-			padding: 30px;
-			background: var(--surface);
-			border: 1px solid #e9ebf2;
-			border-radius: 14px;
-			box-shadow: 0 5px 22px #29304a08;
-		}
-		.eyebrow {
-			margin: 0 0 8px;
-			color: var(--muted);
-			font-size: 12px;
-			font-weight: 750;
-			letter-spacing: 1px;
-			text-transform: uppercase;
-		}
-		h1 { margin: 0; font-size: clamp(26px, 5vw, 36px); }
-		.message { margin: 18px 0 0; color: var(--muted); }
-		.day-events { display: grid; gap: 9px; margin: 20px 0 0; padding: 0; list-style: none; }
-		.day-event { padding: 11px 14px; border-left: 4px solid; border-radius: 6px; font-weight: 600; }
-		.day-event.purple { color: #574fc1; background: #efedff; border-color: #756ce5; }
-		.day-event.blue { color: #3277b8; background: #e8f3ff; border-color: #5a9ee8; }
-		.day-event.orange { color: #a66a1f; background: #fff3e1; border-color: #e6a14e; }
-		.schedule-button {
-			margin-top: 22px;
-			padding: 10px 15px;
-			color: white;
-			background: var(--purple);
-			border: 0;
-			border-radius: 8px;
-			font: inherit;
-			font-weight: 650;
-			cursor: pointer;
-		}
-		.schedule-button:disabled { opacity: .6; cursor: wait; }
-		.schedule-result { margin-top: 20px; }
-		.schedule-result h2 { margin: 18px 0 8px; font-size: 16px; }
-		.schedule-result ul { margin: 0; padding-left: 20px; }
-		@media (max-width: 600px) {
-			body { padding: 20px 12px; }
-			.day-card { padding: 22px; }
-		}
-	</style>
+	<link rel="stylesheet" href="/styles/styles.css">
+	<title>Day view | White Rabbit Calendar</title>
 </head>
-<body>
+<body class="day-view">
 	<main>
-		<a class="back-link" href="calenderFull.html">← Back to calendar</a>
+		<a class="back-link" href="/">← Back to calendar</a>
 		<section class="day-card" aria-labelledby="dayTitle">
 			<p class="eyebrow">Day view</p>
 			<h1 id="dayTitle">Loading date…</h1>
 			<p class="message" id="dayMessage"></p>
-			<ul class="day-events" id="dayEvents" aria-label="Events for this day"></ul>
-			<button class="schedule-button" id="scheduleButton" type="button" disabled>I'm late — reschedule remaining time</button>
+			<div class="day-controls">
+				<label for="startTime">Start time</label>
+				<input id="startTime" type="time" value="09:00" step="900">
+				<button class="schedule-button" id="scheduleButton" type="button" disabled>I'm late — reschedule remaining time</button>
+			</div>
+			<div class="timeline" id="timeline" aria-label="Timeline for this day">
+				<section class="timeline-period" aria-label="Midnight to noon">
+					<h2>12:00 am – 12:00 pm</h2>
+					<div class="timeline-track">
+						<div class="timeline-hours" id="morningHours"></div>
+						<div class="timeline-grid" id="morningGrid"></div>
+					</div>
+				</section>
+				<section class="timeline-period" aria-label="Noon to 11:59 pm">
+					<h2>12:00 pm – 11:59 pm</h2>
+					<div class="timeline-track">
+						<div class="timeline-hours" id="afternoonHours"></div>
+						<div class="timeline-grid" id="afternoonGrid"></div>
+					</div>
+				</section>
+			</div>
 			<div class="schedule-result" id="scheduleResult" role="status" aria-live="polite"></div>
 		</section>
 	</main>
@@ -96,9 +44,241 @@
 		const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateValue);
 		const title = document.getElementById('dayTitle');
 		const message = document.getElementById('dayMessage');
-		const eventList = document.getElementById('dayEvents');
 		const scheduleButton = document.getElementById('scheduleButton');
 		const scheduleResult = document.getElementById('scheduleResult');
+		const startTimeInput = document.getElementById('startTime');
+		const timelinePeriods = [
+			{ startMinute: 0, endMinute: 12 * 60, hours: document.getElementById('morningHours'), grid: document.getElementById('morningGrid') },
+			{ startMinute: 12 * 60, endMinute: 24 * 60, hours: document.getElementById('afternoonHours'), grid: document.getElementById('afternoonGrid') }
+		];
+		const pixelsPerHour = 64;
+		let dayEvents = [];
+		let allEvents = [];
+		let dayYear = 0;
+		let dayMonth = 0;
+		let dayNumber = 0;
+		let dateValueKey = '';
+
+		function saveEvents() {
+			localStorage.setItem('calendarEvents', JSON.stringify(allEvents));
+		}
+
+		function startMinutes() {
+			const [hours, minutes] = startTimeInput.value.split(':').map(Number);
+			return hours * 60 + minutes;
+		}
+
+		function getSelectedStartTimestamp() {
+			const minutes = startMinutes();
+			const selectedStart = new Date(
+				dayYear, dayMonth - 1, dayNumber,
+				Math.floor(minutes / 60), minutes % 60
+			);
+			const today = new Date();
+			if (today.getFullYear() === dayYear &&
+				today.getMonth() === dayMonth - 1 &&
+				today.getDate() === dayNumber) {
+				const nowRoundedUp = Math.ceil(Date.now() / 60000) * 60;
+				return Math.max(Math.floor(selectedStart.getTime() / 1000), nowRoundedUp);
+			}
+			return Math.floor(selectedStart.getTime() / 1000);
+		}
+
+		function formatClockMinutes(minutes) {
+			const normalizedMinutes = minutes % (24 * 60);
+			const hour = Math.floor(normalizedMinutes / 60);
+			const minute = normalizedMinutes % 60;
+			return `${hour % 12 || 12}:${String(minute).padStart(2, '0')} ${hour < 12 ? 'am' : 'pm'}`;
+		}
+
+		function priorityRank(priority) {
+			const rank = ['mustDo', 'shouldDo', 'couldDo'].indexOf(priority);
+			return rank === -1 ? 3 : rank;
+		}
+
+		function earliestAllowedStartMinute() {
+			const selectedDate = new Date(dayYear, dayMonth - 1, dayNumber);
+			const today = new Date();
+			selectedDate.setHours(0, 0, 0, 0);
+			today.setHours(0, 0, 0, 0);
+			if (selectedDate < today) return 24 * 60;
+			if (selectedDate > today) return 0;
+			const now = new Date();
+			const currentMinute = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+			return Math.ceil(currentMinute / 15) * 15;
+		}
+
+		function renderTimelineHours() {
+			timelinePeriods.forEach(period => {
+				period.hours.replaceChildren();
+				period.grid.replaceChildren();
+				period.grid.style.height = `${12 * pixelsPerHour}px`;
+				for (let hour = period.startMinute / 60; hour < period.endMinute / 60; hour++) {
+					const label = document.createElement('div');
+					label.className = 'timeline-hour';
+					label.style.top = `${(hour * 60 - period.startMinute) / 60 * pixelsPerHour}px`;
+					label.textContent = `${hour % 12 || 12}:00 ${hour < 12 ? 'am' : 'pm'}`;
+					period.hours.appendChild(label);
+					const line = document.createElement('div');
+					line.className = 'timeline-hour-line';
+					line.style.top = `${(hour * 60 - period.startMinute) / 60 * pixelsPerHour}px`;
+					period.grid.appendChild(line);
+				}
+			});
+		}
+
+		function renderInitialTimeline() {
+			renderTimelineHours();
+			let cursor = startMinutes();
+			const unpositionedEvents = [];
+			dayEvents.forEach(event => {
+				const duration = Number(event.durationMinutes);
+				if (!Number.isInteger(duration) || duration <= 0 || event.unscheduled) return;
+				if (Number.isInteger(event.startMinute) &&
+					event.startMinute >= 0 &&
+					event.startMinute < 24 * 60) {
+					renderTaskBlock(event, event.startMinute, duration, event.priority);
+					cursor = Math.max(cursor, event.startMinute + duration);
+				} else {
+					unpositionedEvents.push({ event, duration });
+				}
+			});
+			unpositionedEvents.sort((a, b) => priorityRank(a.event.priority) - priorityRank(b.event.priority));
+			unpositionedEvents.forEach(({ event, duration }) => {
+				event.startMinute = cursor;
+				renderTaskBlock(event, cursor, duration, event.priority);
+				cursor += duration;
+			});
+			if (unpositionedEvents.length > 0) saveEvents();
+		}
+
+		function renderTaskBlock(task, startMinute, durationMinutes, priority) {
+			const endMinute = startMinute + durationMinutes;
+			const priorityClass = ['mustDo', 'shouldDo', 'couldDo'].includes(priority) ? priority : 'unprioritized';
+			timelinePeriods.forEach(period => {
+				const clampedStart = Math.max(startMinute, period.startMinute);
+				const clampedEnd = Math.min(endMinute, period.endMinute);
+				if (clampedEnd <= clampedStart) return;
+				const block = document.createElement('div');
+				block.className = `timeline-task priority-${priorityClass}`;
+				block.style.top = `${((clampedStart - period.startMinute) / 60) * pixelsPerHour}px`;
+				block.style.height = `${Math.max(((clampedEnd - clampedStart) / 60) * pixelsPerHour - 4, 28)}px`;
+				block.dataset.priority = priority || '';
+				const eventIndex = allEvents.indexOf(task);
+				if (eventIndex !== -1) {
+					block.draggable = true;
+					block.dataset.eventIndex = eventIndex;
+					block.addEventListener('dragstart', event => {
+						event.dataTransfer.setData('text/plain', String(eventIndex));
+						event.dataTransfer.effectAllowed = 'move';
+						block.dataset.dragging = 'true';
+					});
+					block.addEventListener('dragend', () => {
+						delete block.dataset.dragging;
+					});
+				}
+				const title = document.createElement('span');
+				title.className = 'timeline-task-title';
+				title.textContent = task.title;
+				const time = document.createElement('span');
+				time.className = 'timeline-task-time';
+				time.textContent = `${formatClockMinutes(clampedStart)}–${formatClockMinutes(clampedEnd)}`;
+				block.append(title, time);
+				period.grid.appendChild(block);
+			});
+		}
+
+		function dropTaskOnTimeline(event, period) {
+			event.preventDefault();
+			period.grid.classList.remove('drop-target');
+			const draggedIndex = event.dataTransfer.getData('text/plain');
+			if (!/^\d+$/.test(draggedIndex)) return;
+			const eventIndex = Number(draggedIndex);
+			const task = allEvents[eventIndex];
+			if (!task || task.date !== dateValueKey || !Number.isInteger(task.durationMinutes) ||
+				task.durationMinutes <= 0) return;
+
+			const rank = priorityRank(task.priority);
+			const hasUnscheduledHigherPriorityTask = dayEvents.some(other =>
+				other !== task &&
+				other.unscheduled &&
+				priorityRank(other.priority) < rank
+			);
+			if (hasUnscheduledHigherPriorityTask) {
+				message.textContent = 'Place higher-priority tasks first.';
+				return;
+			}
+
+			const minimumStart = dayEvents.reduce((latestEnd, other) => {
+				if (other === task || other.unscheduled ||
+					priorityRank(other.priority) >= rank ||
+					!Number.isInteger(other.startMinute) ||
+					!Number.isInteger(other.durationMinutes) ||
+					other.durationMinutes <= 0) return latestEnd;
+				return Math.max(latestEnd, other.startMinute + other.durationMinutes);
+			}, earliestAllowedStartMinute());
+			const maximumStart = dayEvents.reduce((earliestStart, other) => {
+				if (other === task || other.unscheduled ||
+					priorityRank(other.priority) <= rank ||
+					!Number.isInteger(other.startMinute)) return earliestStart;
+				return Math.min(earliestStart, other.startMinute - task.durationMinutes);
+			}, 24 * 60 - task.durationMinutes);
+			if (minimumStart > maximumStart) {
+				message.textContent = 'There is not enough room for this task at its priority level after the current time.';
+				return;
+			}
+
+			const rect = period.grid.getBoundingClientRect();
+			const offsetMinutes = Math.max(0, Math.min(
+				period.endMinute - period.startMinute,
+				(event.clientY - rect.top) / pixelsPerHour * 60
+			));
+			const snappedStart = period.startMinute + Math.round(offsetMinutes / 15) * 15;
+			const nextStart = Math.max(minimumStart, Math.min(snappedStart, maximumStart));
+			const overlapsTask = dayEvents.some(other =>
+				other !== task &&
+				!other.unscheduled &&
+				Number.isInteger(other.startMinute) &&
+				Number.isInteger(other.durationMinutes) &&
+				other.durationMinutes > 0 &&
+				nextStart < other.startMinute + other.durationMinutes &&
+				nextStart + task.durationMinutes > other.startMinute
+			);
+			if (overlapsTask) {
+				message.textContent = 'That time overlaps another task.';
+				return;
+			}
+
+			task.startMinute = nextStart;
+			delete task.unscheduled;
+			message.textContent = `${task.title} moved to ${formatClockMinutes(task.startMinute)}.`;
+			saveEvents();
+			renderInitialTimeline();
+
+			const item = scheduleResult.querySelector(`li[data-event-index="${eventIndex}"]`);
+			if (item) {
+				const list = item.parentElement;
+				item.remove();
+				if (list.children.length === 0) {
+					scheduleResult.querySelector('#unscheduledHeading')?.remove();
+					list.remove();
+				}
+			}
+		}
+
+		timelinePeriods.forEach(period => {
+			period.grid.addEventListener('dragover', event => {
+				event.preventDefault();
+				event.dataTransfer.dropEffect = 'move';
+				period.grid.classList.add('drop-target');
+			});
+			period.grid.addEventListener('dragleave', event => {
+				if (!period.grid.contains(event.relatedTarget)) {
+					period.grid.classList.remove('drop-target');
+				}
+			});
+			period.grid.addEventListener('drop', event => dropTaskOnTimeline(event, period));
+		});
 
 		if (match) {
 			const [, year, month, day] = match;
@@ -106,47 +286,55 @@
 			if (date.getFullYear() === Number(year) &&
 				date.getMonth() === Number(month) - 1 &&
 				date.getDate() === Number(day)) {
+				dayYear = Number(year);
+				dayMonth = Number(month);
+				dayNumber = Number(day);
+				dateValueKey = dateValue;
 				title.textContent = date.toLocaleDateString(undefined, {
 					weekday: 'long',
 					month: 'long',
 					day: 'numeric',
 					year: 'numeric'
 				});
-				const events = JSON.parse(localStorage.getItem('calendarEvents') || '[]');
-				const dayEvents = events.filter(event => event.date === dateValue);
+				allEvents = JSON.parse(localStorage.getItem('calendarEvents') || '[]');
+				dayEvents = allEvents.filter(event => event.date === dateValue);
+				startTimeInput.value = localStorage.getItem(`dayStart:${dateValue}`) || '09:00';
 				scheduleButton.disabled = false;
 				if (dayEvents.length === 0) {
 					message.textContent = 'No tasks scheduled.';
 				} else {
 					message.textContent = `${dayEvents.length} task${dayEvents.length === 1 ? '' : 's'}`;
-					dayEvents.forEach(event => {
-						const item = document.createElement('li');
-						item.className = `day-event ${event.color}`;
-						const duration = Number.isInteger(event.durationMinutes)
-							? ` — ${event.durationMinutes} min`
-							: '';
-						item.textContent = `${event.title}${duration}`;
-						eventList.appendChild(item);
-					});
 				}
+				renderInitialTimeline();
+				startTimeInput.addEventListener('change', () => {
+					localStorage.setItem(`dayStart:${dateValueKey}`, startTimeInput.value);
+					scheduleResult.replaceChildren();
+					renderInitialTimeline();
+				});
 
 				scheduleButton.addEventListener('click', async () => {
-					const priorities = new Set(['mustDo', 'shrinkable', 'movable']);
+					const priorities = new Set(['mustDo', 'shouldDo', 'couldDo']);
 					const tasks = dayEvents.filter(event =>
 						typeof event.title === 'string' &&
 						Number.isInteger(event.durationMinutes) &&
 						event.durationMinutes > 0 &&
 						priorities.has(event.priority)
 					);
+					tasks.sort((a, b) =>
+						priorityRank(a.priority) - priorityRank(b.priority) ||
+						(Number.isInteger(a.startMinute) ? a.startMinute : Infinity) -
+						(Number.isInteger(b.startMinute) ? b.startMinute : Infinity)
+					);
 					const dayStart = new Date(
 						Number(year), Number(month) - 1, Number(day)
 					);
 					const dayEnd = new Date(
-						Number(year), Number(month) - 1, Number(day) + 1
+						Number(year), Number(month) - 1, Number(day), 24, 0
 					);
 					const form = new URLSearchParams({
 						dayStart: String(Math.floor(dayStart.getTime() / 1000)),
 						dayEnd: String(Math.floor(dayEnd.getTime() / 1000)),
+						scheduleStart: String(getSelectedStartTimestamp()),
 						taskCount: String(tasks.length)
 					});
 					tasks.forEach((task, index) => {
@@ -185,11 +373,13 @@
 
 		function renderSchedule(plan) {
 			scheduleResult.replaceChildren();
+			renderTimelineHours();
+			const summary = document.createElement('p');
 			const availableHours = Math.floor(plan.availableMinutes / 60);
 			const availableMinutes = plan.availableMinutes % 60;
-			const summary = document.createElement('p');
-			summary.textContent = `Available for this day: ${availableHours}h ${availableMinutes}m.`;
+			summary.textContent = `Time available after start: ${availableHours}h ${availableMinutes}m.`;
 			scheduleResult.appendChild(summary);
+			const updatedEvents = new Set();
 
 			if (plan.scheduled.length === 0 && plan.unscheduled.length === 0) {
 				const empty = document.createElement('p');
@@ -198,30 +388,59 @@
 			}
 
 			if (plan.scheduled.length > 0) {
-				const heading = document.createElement('h2');
-				heading.textContent = 'Updated plan';
-				scheduleResult.appendChild(heading);
-				const list = document.createElement('ul');
 				plan.scheduled.forEach(task => {
-					const item = document.createElement('li');
-					item.textContent = `${formatClock(task.start)}–${formatClock(task.end)}: ${task.title} (${task.priority}, ${task.durationMinutes} min)`;
-					list.appendChild(item);
+					const start = new Date(task.start * 1000);
+					const startMinute = start.getHours() * 60 + start.getMinutes();
+					const event = dayEvents.find(item =>
+						!updatedEvents.has(item) &&
+						item.title === task.title &&
+						item.durationMinutes === task.durationMinutes &&
+						item.priority === task.priority
+					);
+					if (event) {
+						event.startMinute = startMinute;
+						delete event.unscheduled;
+						updatedEvents.add(event);
+					}
+					renderTaskBlock(event || { title: task.title }, startMinute, task.durationMinutes, task.priority);
 				});
-				scheduleResult.appendChild(list);
 			}
 
 			if (plan.unscheduled.length > 0) {
 				const heading = document.createElement('h2');
+				heading.id = 'unscheduledHeading';
 				heading.textContent = 'Did not fit today';
 				scheduleResult.appendChild(heading);
 				const list = document.createElement('ul');
 				plan.unscheduled.forEach(task => {
+					const event = dayEvents.find(item =>
+						!updatedEvents.has(item) &&
+						item.title === task.title &&
+						item.durationMinutes === task.durationMinutes &&
+						item.priority === task.priority
+					);
+					if (event) {
+						delete event.startMinute;
+						event.unscheduled = true;
+						updatedEvents.add(event);
+					}
 					const item = document.createElement('li');
+					item.className = `unscheduled-task priority-${priorityRank(task.priority) < 3 ? task.priority : 'unprioritized'}`;
 					item.textContent = `${task.title} (${task.priority}, ${task.durationMinutes} min)`;
+					const eventIndex = event ? allEvents.indexOf(event) : -1;
+					if (eventIndex !== -1) {
+						item.draggable = true;
+						item.dataset.eventIndex = eventIndex;
+						item.addEventListener('dragstart', dragEvent => {
+							dragEvent.dataTransfer.setData('text/plain', String(eventIndex));
+							dragEvent.dataTransfer.effectAllowed = 'move';
+						});
+					}
 					list.appendChild(item);
 				});
 				scheduleResult.appendChild(list);
 			}
+			if (updatedEvents.size > 0) saveEvents();
 		}
 
 		function formatClock(timestamp) {

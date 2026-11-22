@@ -89,6 +89,10 @@ bool receiveRequest(int client, HttpRequest& result) {
             return false;
         }
     }
+    const std::size_t queryStart = result.path.find('?');
+    if (queryStart != std::string::npos) {
+        result.path.erase(queryStart);
+    }
 
     std::size_t contentLength = 0;
     std::string headerLine;
@@ -139,10 +143,6 @@ bool receiveRequest(int client, HttpRequest& result) {
         request.append(buffer, static_cast<std::size_t>(count));
     }
     result.body = request.substr(bodyStart, contentLength);
-    const std::size_t queryStart = result.path.find('?');
-    if (queryStart != std::string::npos) {
-        result.path.erase(queryStart);
-    }
     return true;
 }
 
@@ -263,6 +263,7 @@ void handleSchedule(int client, const std::string& body) {
     int taskCount = 0;
     std::time_t dayStart = 0;
     std::time_t dayEnd = 0;
+    std::time_t scheduleStart = 0;
     if (!parseForm(body, values) || values.count("dayStart") == 0 ||
         values.count("dayEnd") == 0 ||
         !parseInteger(values["dayStart"], dayStart) ||
@@ -273,6 +274,10 @@ void handleSchedule(int client, const std::string& body) {
         respond(client, "400 Bad Request", "{\"error\":\"Invalid schedule request\"}",
                 "application/json; charset=utf-8");
         return;
+    }
+    if (values.count("scheduleStart") != 0 &&
+        parseInteger(values["scheduleStart"], scheduleStart)) {
+        dayStart = scheduleStart;
     }
 
     std::vector<imlate::Task> tasks;
@@ -297,22 +302,24 @@ void handleSchedule(int client, const std::string& body) {
         imlate::Priority taskPriority;
         if (priority->second == "mustDo") {
             taskPriority = imlate::Priority::mustDo;
-        } else if (priority->second == "shrinkable") {
-            taskPriority = imlate::Priority::shrinkable;
-        } else if (priority->second == "movable") {
-            taskPriority = imlate::Priority::movable;
+        } else if (priority->second == "shouldDo") {
+            taskPriority = imlate::Priority::shouldDo;
+        } else if (priority->second == "couldDo") {
+            taskPriority = imlate::Priority::couldDo;
         } else {
             respond(client, "400 Bad Request",
                     "{\"error\":\"Unknown task priority\"}",
                     "application/json; charset=utf-8");
             return;
         }
-        tasks.push_back({title->second, durationMinutes, taskPriority});
+        tasks.push_back({title->second, durationMinutes, taskPriority, dayEnd});
     }
 
     try {
+        const std::time_t scheduleTime =
+            scheduleStart != 0 ? scheduleStart : std::time(nullptr);
         const imlate::Schedule schedule =
-            imlate::buildSchedule(dayStart, dayEnd, tasks);
+            imlate::buildSchedule(dayStart, dayEnd, tasks, scheduleTime);
         respond(client, "200 OK", scheduleJson(schedule),
                 "application/json; charset=utf-8");
     } catch (const std::invalid_argument& error) {
@@ -327,7 +334,8 @@ void handleSchedule(int client, const std::string& body) {
 }
 
 void handleClient(int client, const std::string& fullPage,
-                  const std::string& dayPage) {
+                  const std::string& dayPage,
+                  const std::string& styles) {
     HttpRequest request;
     if (!receiveRequest(client, request)) {
         respond(client, "400 Bad Request", "Invalid request");
@@ -349,6 +357,8 @@ void handleClient(int client, const std::string& fullPage,
         respond(client, "200 OK", fullPage);
     } else if (request.path == "/calenderDay.html") {
         respond(client, "200 OK", dayPage);
+    } else if (request.path == "/styles/styles.css") {
+        respond(client, "200 OK", styles, "text/css; charset=utf-8");
     } else {
         respond(client, "404 Not Found", "Not found");
     }
@@ -380,6 +390,14 @@ int main(int argc, char* argv[]) {
     }
     const std::string dayPage((std::istreambuf_iterator<char>(dayFile)),
                               std::istreambuf_iterator<char>());
+    std::ifstream stylesFile("styles/styles.css", std::ios::binary);
+    if (!stylesFile) {
+        std::cerr << "Could not open styles/styles.css. "
+                     "Run this program from the project root.\n";
+        return 1;
+    }
+    const std::string styles((std::istreambuf_iterator<char>(stylesFile)),
+                             std::istreambuf_iterator<char>());
 
     const int server = socket(AF_INET, SOCK_STREAM, 0);
     if (server < 0) {
@@ -426,7 +444,7 @@ int main(int argc, char* argv[]) {
             close(server);
             return 1;
         }
-        handleClient(client, fullPage, dayPage);
+        handleClient(client, fullPage, dayPage, styles);
         close(client);
     }
 }

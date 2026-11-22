@@ -4,145 +4,8 @@
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<meta name="theme-color" content="#f6f7fb">
-	<title>Calendar</title>
-	<style>
-		:root {
-			color-scheme: light;
-			--ink: #202338;
-			--muted: #898da1;
-			--line: #eceef4;
-			--purple: #6b62dc;
-			--purple-light: #eeedff;
-			--surface: #fff;
-			--canvas: #f6f7fb;
-		}
-
-		* { box-sizing: border-box; }
-		body {
-			margin: 0;
-			min-height: 100vh;
-			background: var(--canvas);
-			color: var(--ink);
-			font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-		}
-		button { font: inherit; }
-		.app { display: flex; min-height: 100vh; }
-		.sidebar {
-			width: 256px;
-			flex: 0 0 256px;
-			padding: 28px 20px;
-			background: var(--surface);
-			border-right: 1px solid var(--line);
-		}
-		.brand { display: flex; align-items: center; gap: 11px; margin: 0 0 32px 4px; font-size: 19px; font-weight: 750; letter-spacing: -.5px; }
-		.brand-mark { display: grid; width: 34px; height: 34px; place-items: center; color: white; background: var(--purple); border-radius: 11px; }
-		.brand-mark svg { width: 19px; height: 19px; }
-		.new-event {
-			display: flex; align-items: center; justify-content: center; gap: 9px;
-			width: 100%; padding: 12px 14px; margin-bottom: 12px;
-			color: white; background: var(--purple); border: 0; border-radius: 10px;
-			font-weight: 650; cursor: pointer; box-shadow: 0 5px 13px #6b62dc2c;
-			transition: background .2s, transform .2s;
-		}
-		.new-event:hover { background: #5950ca; transform: translateY(-1px); }
-		.delete-all-events {
-			flex: 0 0 auto; padding: 8px 10px;
-			color: #a63e4b; background: #fff; border: 1px solid #f0ccd1;
-			border-radius: 8px; font-size: 12px; font-weight: 650; white-space: nowrap; cursor: pointer;
-		}
-		.delete-all-events:hover:not(:disabled) { background: #fff4f5; }
-		.delete-all-events:disabled { color: #b7bac7; border-color: #eceef4; cursor: not-allowed; }
-		.section-label { margin: 0 0 12px 8px; color: var(--muted); font-size: 11px; font-weight: 750; letter-spacing: 1.2px; text-transform: uppercase; }
-		.mini-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-weight: 650; }
-		.mini-controls { display: flex; gap: 4px; }
-		.icon-button { display: grid; width: 32px; height: 32px; place-items: center; color: #777b8d; background: transparent; border: 0; border-radius: 8px; cursor: pointer; }
-		.icon-button:hover { color: var(--ink); background: #f1f2f7; }
-		.icon-button svg { width: 17px; height: 17px; }
-		.mini-weekdays, .mini-grid { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; }
-		.mini-weekdays { margin-bottom: 7px; color: #a0a3b2; font-size: 10px; font-weight: 700; }
-		.mini-grid { gap: 4px 0; }
-		.mini-day { display: grid; width: 28px; height: 28px; place-items: center; justify-self: center; color: #5b5e70; border: 0; border-radius: 50%; background: transparent; font-size: 11px; cursor: pointer; }
-		.mini-day:hover { background: #f0efff; }
-		.mini-day.outside { color: #c2c4ce; }
-		.mini-day.today { color: white; background: var(--purple); font-weight: 700; }
-		.mini-day.selected:not(.today) { color: var(--purple); background: var(--purple-light); font-weight: 700; }
-		.sidebar-divider { height: 1px; margin: 26px 0 23px; background: var(--line); }
-		.calendar-list { display: grid; gap: 15px; }
-		.calendar-option { display: flex; align-items: center; gap: 10px; color: #55596c; font-size: 13px; }
-		.calendar-option input { width: 15px; height: 15px; margin: 0; accent-color: var(--purple); }
-		.legend-dot { width: 9px; height: 9px; margin-left: auto; border-radius: 50%; }
-		.dot-purple { background: #766be8; } .dot-blue { background: #5a9ee8; } .dot-orange { background: #e6a14e; }
-		main { flex: 1; min-width: 0; padding: 30px 36px 36px; }
-		.topbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 29px; }
-		.top-left, .top-actions, .month-controls { display: flex; align-items: center; }
-		.top-left { gap: 18px; }
-		.today-button { padding: 8px 14px; color: #45495a; background: white; border: 1px solid #e6e8ef; border-radius: 8px; font-weight: 600; cursor: pointer; }
-		.today-button:hover { border-color: #c9c6f5; color: var(--purple); }
-		.month-controls { gap: 6px; }
-		.month-title { min-width: 205px; margin: 0; font-size: 25px; font-weight: 720; letter-spacing: -.7px; }
-		.top-actions { gap: 11px; }
-		.view-select { padding: 9px 31px 9px 12px; color: #4a4e60; background: white; border: 1px solid #e6e8ef; border-radius: 8px; font: inherit; font-size: 13px; cursor: pointer; }
-		.search-button { border: 1px solid #e6e8ef; background: white; }
-		.avatar { display: grid; width: 35px; height: 35px; place-items: center; color: #4b3b76; background: #e9e2ff; border: 2px solid white; border-radius: 50%; font-size: 12px; font-weight: 750; }
-		.calendar-card { overflow: hidden; background: var(--surface); border: 1px solid #e9ebf2; border-radius: 14px; box-shadow: 0 5px 22px #29304a08; }
-		.weekdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
-		.weekday { padding: 15px 8px; color: #878b9d; font-size: 11px; font-weight: 750; letter-spacing: .8px; text-align: center; text-transform: uppercase; }
-		.month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
-		.day-cell { position: relative; min-height: 126px; padding: 10px 9px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); transition: background .15s; }
-		.day-cell:nth-child(7n) { border-right: 0; }
-		.day-cell:hover { background: #fbfbfe; }
-		.day-cell.outside { background: #fcfcfe; }
-		.day-number { display: grid; width: 27px; height: 27px; place-items: center; margin-bottom: 5px; color: #55596c; border-radius: 50%; font-size: 12px; font-weight: 600; }
-		.outside .day-number { color: #b7bac7; }
-		.day-cell.is-today .day-number { color: white; background: var(--purple); }
-		.event { display: flex; align-items: center; justify-content: space-between; gap: 3px; overflow: hidden; margin: 4px 0; padding: 3px 4px 3px 7px; border-left: 3px solid; border-radius: 4px; font-size: 11px; font-weight: 600; line-height: 1.35; }
-		.event-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-		.delete-event { flex: 0 0 16px; padding: 0; color: inherit; background: transparent; border: 0; border-radius: 3px; font-size: 15px; line-height: 1; cursor: pointer; }
-		.delete-event:hover { background: #00000012; }
-		.delete-event:focus-visible, .delete-all-events:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
-		.event.purple { color: #574fc1; background: #efedff; border-color: #756ce5; }
-		.event.blue { color: #3277b8; background: #e8f3ff; border-color: #5a9ee8; }
-		.event.orange { color: #a66a1f; background: #fff3e1; border-color: #e6a14e; }
-		.empty-state { padding: 42px 20px; color: var(--muted); text-align: center; }
-		.modal-backdrop { position: fixed; inset: 0; z-index: 3; display: none; place-items: center; padding: 20px; background: #20233855; }
-		.modal-backdrop.open { display: grid; }
-		.modal { width: min(420px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; padding: 25px; background: white; border-radius: 14px; box-shadow: 0 18px 60px #171a2c30; }
-		.modal h2 { margin: 0 0 20px; font-size: 20px; }
-		.form-field { display: grid; gap: 7px; margin-bottom: 15px; color: #65697a; font-size: 12px; font-weight: 650; }
-		.form-field input, .form-field select { width: 100%; padding: 10px 11px; color: var(--ink); background: white; border: 1px solid #e3e5ed; border-radius: 7px; font: inherit; }
-		.form-field input:focus, .form-field select:focus { outline: 2px solid #c9c6f5; outline-offset: 1px; }
-		.modal-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 21px; }
-		.modal-actions button { padding: 9px 14px; border: 0; border-radius: 7px; cursor: pointer; }
-		.cancel-button { color: #55596c; background: #f1f2f6; }
-		.save-button { color: white; background: var(--purple); font-weight: 650; }
-		@media (max-width: 900px) {
-			.sidebar { width: 220px; flex-basis: 220px; padding: 24px 15px; }
-			main { padding: 25px 20px; }
-			.day-cell { min-height: 108px; padding: 8px 6px; }
-		}
-		@media (max-width: 680px) {
-			.app { display: block; }
-			.sidebar { display: none; }
-			main { padding: 20px 12px; }
-			.topbar { align-items: flex-start; flex-direction: column; margin-bottom: 20px; }
-			.top-left { width: 100%; justify-content: space-between; gap: 8px; }
-			.month-title { min-width: 0; font-size: 21px; }
-			.top-actions { align-self: flex-end; }
-			.weekday { padding: 10px 2px; font-size: 9px; }
-			.day-cell { min-height: 85px; padding: 5px 3px; }
-			.day-number { width: 23px; height: 23px; font-size: 11px; }
-			.event { padding: 3px 4px; font-size: 9px; }
-		}
-		@media (max-width: 390px) {
-			.today-button { padding: 7px 9px; }
-			.month-title { font-size: 19px; }
-			.top-actions { gap: 6px; }
-			.delete-all-events { padding: 7px; font-size: 10px; }
-			.view-select { padding-right: 22px; padding-left: 8px; }
-			.day-cell { min-height: 72px; }
-			.event { border-left-width: 2px; font-size: 8px; }
-		}
-	</style>
+	<link rel="stylesheet" href="/styles/styles.css">
+	<title>Full View | White Rabbit Calendar</title>
 </head>
 <body>
 	<div class="app">
@@ -153,13 +16,6 @@
 			<div class="mini-header"><span id="miniMonth"></span><div class="mini-controls"><button class="icon-button" id="miniPrev" aria-label="Previous month">‹</button><button class="icon-button" id="miniNext" aria-label="Next month">›</button></div></div>
 			<div class="mini-weekdays" aria-hidden="true"><span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span></div>
 			<div class="mini-grid" id="miniGrid"></div>
-			<div class="sidebar-divider"></div>
-			<p class="section-label">My calendars</p>
-			<div class="calendar-list">
-				<label class="calendar-option"><input type="checkbox" checked data-calendar="purple"> Personal <span class="legend-dot dot-purple"></span></label>
-				<label class="calendar-option"><input type="checkbox" checked data-calendar="blue"> Work <span class="legend-dot dot-blue"></span></label>
-				<label class="calendar-option"><input type="checkbox" checked data-calendar="orange"> Important <span class="legend-dot dot-orange"></span></label>
-			</div>
 		</aside>
 
 		<main>
@@ -187,13 +43,12 @@
 			<h2 id="modalTitle">Create task</h2>
 			<label class="form-field">Task name<input id="eventName" type="text" placeholder="e.g. Team catch-up" required maxlength="60"></label>
 			<label class="form-field">Date<input id="eventDate" type="date" required></label>
-			<label class="form-field">Calendar<select id="eventCalendar"><option value="purple">Personal</option><option value="blue">Work</option><option value="orange">Important</option></select></label>
 			<label class="form-field">Estimated time to complete (minutes)<input id="eventDuration" type="number" min="1" max="1440" value="60" required></label>
 			<label class="form-field">Priority
 				<select id="eventPriority">
 					<option value="mustDo">Must do</option>
-					<option value="shrinkable">Shrinkable</option>
-					<option value="movable">Movable</option>
+					<option value="shouldDo">Should Do</option>
+					<option value="couldDo">Could Do</option>
 				</select>
 			</label>
 			<div class="modal-actions"><button class="cancel-button" id="cancelEvent" type="button">Cancel</button><button class="save-button" type="submit">Save event</button></div>
@@ -206,9 +61,9 @@
 			const state = { year: today.getFullYear(), month: today.getMonth(), selected: new Date(today.getFullYear(), today.getMonth(), today.getDate()), view: 'month' };
 			const defaultEvents = [
 				{ date: dateKey(today.getFullYear(), today.getMonth(), 4), title: 'Focus time', color: 'purple', durationMinutes: 60, priority: 'mustDo' },
-				{ date: dateKey(today.getFullYear(), today.getMonth(), 9), title: 'Design review', color: 'blue', durationMinutes: 60, priority: 'shrinkable' },
-				{ date: dateKey(today.getFullYear(), today.getMonth(), 15), title: 'Project check-in', color: 'orange', durationMinutes: 60, priority: 'shrinkable' },
-				{ date: dateKey(today.getFullYear(), today.getMonth(), 22), title: 'Coffee with Zach, Rob, Evan, and Ethan', color: 'purple', durationMinutes: 60, priority: 'movable' }
+				{ date: dateKey(today.getFullYear(), today.getMonth(), 9), title: 'Design review', color: 'blue', durationMinutes: 60, priority: 'shouldDo' },
+				{ date: dateKey(today.getFullYear(), today.getMonth(), 15), title: 'Project check-in', color: 'orange', durationMinutes: 60, priority: 'shouldDo' },
+				{ date: dateKey(today.getFullYear(), today.getMonth(), 22), title: 'Coffee with Zach, Rob, Evan, and Ethan', color: 'purple', durationMinutes: 60, priority: 'couldDo' }
 			];
 			const storedEvents = localStorage.getItem('calendarEvents');
 			const events = storedEvents === null ? defaultEvents : JSON.parse(storedEvents);
@@ -224,6 +79,9 @@
 
 			function dateKey(year, month, day) {
 				return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+			}
+			function priorityClass(priority) {
+				return ['mustDo', 'shouldDo', 'couldDo'].includes(priority) ? `priority-${priority}` : 'priority-unprioritized';
 			}
 			function saveEvents() {
 				localStorage.setItem('calendarEvents', JSON.stringify(events));
@@ -253,9 +111,9 @@
 					number.className = 'day-number';
 					number.textContent = date.getDate();
 					cell.appendChild(number);
-					events.filter(calendarEvent => calendarEvent.date === key && document.querySelector(`[data-calendar="${calendarEvent.color}"]`)?.checked !== false).forEach(calendarEvent => {
+					events.filter(calendarEvent => calendarEvent.date === key).forEach(calendarEvent => {
 						const item = document.createElement('div');
-						item.className = `event ${calendarEvent.color}`;
+						item.className = `event ${priorityClass(calendarEvent.priority)}`;
 						item.title = calendarEvent.title;
 						const eventTitle = document.createElement('span');
 						eventTitle.className = 'event-title';
@@ -316,8 +174,6 @@
 			document.getElementById('miniNext').addEventListener('click', () => shiftMonth(1));
 			document.getElementById('todayButton').addEventListener('click', () => { state.year = today.getFullYear(); state.month = today.getMonth(); state.selected = new Date(today); render(); });
 			document.getElementById('viewSelect').addEventListener('change', event => { state.view = event.target.value; render(); });
-			document.querySelectorAll('[data-calendar]').forEach(input => input.addEventListener('change', render));
-
 			function openModal(date = state.selected) {
 				document.getElementById('eventDate').value = dateKey(date.getFullYear(), date.getMonth(), date.getDate());
 				modal.classList.add('open');
@@ -342,7 +198,6 @@
 				events.push({
 					date: document.getElementById('eventDate').value,
 					title: name,
-					color: document.getElementById('eventCalendar').value,
 					durationMinutes: Number(document.getElementById('eventDuration').value),
 					priority: document.getElementById('eventPriority').value
 				});

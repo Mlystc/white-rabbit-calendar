@@ -1,58 +1,40 @@
 #include <iostream>
 #include <fstream>
-
-#include <iostream>
 #include <string>
-
 #include <chrono>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
-namespace std
+#include <stdexcept>
 
-string getCurrentTime() {
+#include "imLate.h"
 
-   auto now = chrono::system_clock::now();
+namespace imlate {
 
-   time_t currentTime = chrono::system_clock::to_time_t(now);
+std::string getCurrentTime() {
+    auto now = std::chrono::system_clock::now();
 
-   tm* localTime = localtime(&currentTime);
+    std::time_t currentTime =
+        std::chrono::system_clock::to_time_t(now);
 
-   stringstream ss;
+    std::tm localTime{};
 
-   ss << put_time(localTime, "%Y-%m-%d %H:%M:%S");
+#ifdef _WIN32
+    localtime_s(&localTime, &currentTime);
+#else
+    localtime_r(&currentTime, &localTime);
+#endif
 
-   return ss.str();
+    std::stringstream ss;
+    ss << std::put_time(&localTime, "%Y-%m-%d %H:%M:%S");
+
+    return ss.str();
 }
 
-struct Task {
+}
+int main() {
 
-   int id;
+    // Main program starts here.
 
-   string task_name;
-
-   string due_date;
-   string due_time;
-
-   string start_time;
-   string estimated_end_time;
-
-   int duration_minutes;
-
-   int importance;
-
-   string color;
-
-   bool completed = false;
-};
-
-
-
-int main(){
-
-   string startTime = getCurrentTime();
-
-   cout << startTime;
-
-   return 0;
+    return 0;
 }
