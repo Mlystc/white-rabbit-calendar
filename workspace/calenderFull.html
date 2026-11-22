@@ -35,7 +35,6 @@
 					<button class="delete-all-events" id="deleteAllEventsButton" type="button" aria-label="Delete all events">Delete all</button>
 					<button class="icon-button search-button" id="searchButton" aria-label="Search events"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg></button>
 					<select class="view-select" id="viewSelect" aria-label="Calendar view"><option value="month">Month</option><option value="week">Week</option></select>
-					<div class="avatar" aria-label="User profile">JD</div>
 				</div>
 			</header>
 			<section class="calendar-card" aria-label="Calendar">
@@ -66,17 +65,8 @@
 		(() => {
 			const today = new Date();
 			const state = { year: today.getFullYear(), month: today.getMonth(), selected: new Date(today.getFullYear(), today.getMonth(), today.getDate()), view: 'month' };
-			const defaultEvents = [
-				{ date: dateKey(today.getFullYear(), today.getMonth(), 4), title: 'Focus time', color: 'purple', durationMinutes: 60, priority: 'mustDo' },
-				{ date: dateKey(today.getFullYear(), today.getMonth(), 9), title: 'Design review', color: 'blue', durationMinutes: 60, priority: 'shouldDo' },
-				{ date: dateKey(today.getFullYear(), today.getMonth(), 15), title: 'Project check-in', color: 'orange', durationMinutes: 60, priority: 'shouldDo' },
-				{ date: dateKey(today.getFullYear(), today.getMonth(), 22), title: 'Coffee with Zach, Rob, Evan, and Ethan', color: 'purple', durationMinutes: 60, priority: 'couldDo' }
-			];
 			const storedEvents = localStorage.getItem('calendarEvents');
-			const events = storedEvents === null ? defaultEvents : JSON.parse(storedEvents);
-			if (storedEvents === null) {
-				localStorage.setItem('calendarEvents', JSON.stringify(events));
-			}
+			const events = storedEvents === null ? [] : JSON.parse(storedEvents);
 			const monthTitle = document.getElementById('monthTitle');
 			const grid = document.getElementById('calendarGrid');
 			const miniGrid = document.getElementById('miniGrid');

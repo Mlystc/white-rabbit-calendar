@@ -69,7 +69,6 @@
 		.top-actions { gap: 11px; }
 		.view-select { padding: 9px 31px 9px 12px; color: #4a4e60; background: white; border: 1px solid #e6e8ef; border-radius: 8px; font: inherit; font-size: 13px; cursor: pointer; }
 		.search-button { border: 1px solid #e6e8ef; background: white; }
-		.avatar { display: grid; width: 35px; height: 35px; place-items: center; color: #4b3b76; background: #e9e2ff; border: 2px solid white; border-radius: 50%; font-size: 12px; font-weight: 750; }
 		.calendar-card { overflow: hidden; background: var(--surface); border: 1px solid #e9ebf2; border-radius: 14px; box-shadow: 0 5px 22px #29304a08; }
 		.weekdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
 		.weekday { padding: 15px 8px; color: #878b9d; font-size: 11px; font-weight: 750; letter-spacing: .8px; text-align: center; text-transform: uppercase; }
